@@ -8,6 +8,7 @@
 
 
 import math
+import os
 from typing import Optional, Literal, Dict, List
 from glob import glob
 import concurrent.futures
@@ -39,6 +40,14 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 max_threads = min(multiprocessing.cpu_count(), 8)
 
 
+def _dataloader_num_workers():
+    return 0 if os.name == 'nt' else min(multiprocessing.cpu_count(), 8)
+
+
+def _identity_collate(item):
+    return item
+
+
 class NeRFDatasetWriter:
     def __init__(self, cfg_data: DataConfig, tgt_folder: Path, subset:Optional[str]=None, scale_factor: Optional[float]=None, background_color: Optional[str]=None):
         self.cfg_data = cfg_data
@@ -51,7 +60,7 @@ class NeRFDatasetWriter:
         cfg_data.background_color = 'white'
         cfg_data.use_alpha_map = True
         dataset = import_module(cfg_data._target)(cfg=cfg_data, batchify_all_views=False)
-        self.dataloader = DataLoader(dataset, shuffle=False, batch_size=None, collate_fn=lambda x: x, num_workers=min(multiprocessing.cpu_count(), 8))
+        self.dataloader = DataLoader(dataset, shuffle=False, batch_size=None, collate_fn=_identity_collate, num_workers=_dataloader_num_workers())
 
     def write(self):
         if not self.tgt_folder.exists():
@@ -366,7 +375,7 @@ class MaskFromFLAME:
             use_fg_mask=True,
             use_flame_param=True,
         )
-        self.dataloader = DataLoader(dataset, shuffle=False, batch_size=None, collate_fn=None, num_workers=min(multiprocessing.cpu_count(), 8))
+        self.dataloader = DataLoader(dataset, shuffle=False, batch_size=None, collate_fn=None, num_workers=_dataloader_num_workers())
 
         self.flame_model = FlameHead(cfg_model.n_shape, cfg_model.n_expr, add_teeth=True)
 

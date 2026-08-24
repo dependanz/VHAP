@@ -1,6 +1,7 @@
 from pathlib import Path
 from tqdm import tqdm
 from typing import Literal, Optional, List
+from fractions import Fraction
 import tyro
 import ffmpeg
 from PIL import Image
@@ -19,24 +20,30 @@ def video2frames(video_path: Path, image_dir: Path, keep_video_name: bool=False,
     file_path_stem = video_path.stem + '_' if keep_video_name else ''
 
     probe = ffmpeg.probe(str(video_path))
-    
-    video_fps = int(probe['streams'][0]['r_frame_rate'].split('/')[0])
-    if  video_fps ==0:
-        video_fps = int(probe['streams'][0]['avg_frame_rate'].split('/')[0])
-        if video_fps == 0:
-            # nb_frames / duration
-            video_fps = int(probe['streams'][0]['nb_frames']) / float(probe['streams'][0]['duration'])
-            if video_fps == 0:
-                raise ValueError('Cannot get valid video fps')
-
-    num_frames = int(probe['streams'][0]['nb_frames'])
     video = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+    if video is None:
+        raise ValueError(f'Cannot find video stream in {video_path}')
+
+    def parse_fps(value: str) -> float:
+        try:
+            return float(Fraction(value))
+        except (ZeroDivisionError, ValueError):
+            return 0.0
+
+    video_fps = parse_fps(video.get('avg_frame_rate', '0/0')) or parse_fps(video.get('r_frame_rate', '0/0'))
+    if video_fps == 0:
+        # nb_frames / duration
+        video_fps = int(video['nb_frames']) / float(video['duration'])
+        if video_fps == 0:
+            raise ValueError('Cannot get valid video fps')
+
+    num_frames = int(video.get('nb_frames') or round(float(video['duration']) * video_fps))
     W = int(video['width'])
     H = int(video['height'])
     w = W // n_downsample
     h = H // n_downsample
-    print(f'[Video]  FPS: {video_fps} | number of frames: {num_frames} | resolution: {W}x{H}')
-    print(f'[Target] FPS: {target_fps} | number of frames: {round(num_frames * target_fps / int(video_fps))} | resolution: {w}x{h}')
+    print(f'[Video]  FPS: {video_fps:.3f} | number of frames: {num_frames} | resolution: {W}x{H}')
+    print(f'[Target] FPS: {target_fps} | number of frames: {round(num_frames * target_fps / video_fps)} | resolution: {w}x{h}')
 
     (ffmpeg
     .input(str(video_path))
@@ -57,7 +64,7 @@ def robust_video_matting(image_dir: Path, N_warmup: Optional[int]=10):
     model = torch.hub.load("PeterL1n/RobustVideoMatting", "resnet50").cuda()
 
     dataset = ImageFolderDataset(image_folder=image_dir)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
     # bgr = torch.tensor([.47, 1, .6]).view(3, 1, 1).cuda()  # Green background.
     rec = [None] * 4  # Initial recurrent states.
@@ -115,7 +122,7 @@ def background_matting_v2(
         background_fname2camId=lambda x: x.split('.')[0].split('_')[1],  # image_00001.jpg -> 00001
         image_fname2camId=lambda x: x.split('.')[0].split('_')[1],       # cam_00001.jpg -> 00001
     )
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
     for item in tqdm(dataloader):
         src = item['rgb']
